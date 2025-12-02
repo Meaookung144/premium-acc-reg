@@ -658,6 +658,11 @@ def process_single_email(driver, wait, current_email_data, url):
     # Step 18: Click Join VIP button
     try:
         print("\nStep 17: Clicking Join VIP button...")
+
+        # Store original window handle
+        original_window = driver.current_window_handle
+        print(f"✓ Original window handle stored: {original_window}")
+
         join_vip_button = None
         join_vip_selectors = [
             (By.XPATH, "//div[@class='buy-btn']//p[contains(text(), 'Join VIP')]"),
@@ -677,46 +682,79 @@ def process_single_email(driver, wait, current_email_data, url):
         if join_vip_button:
             join_vip_button.click()
             print("✓ Clicked Join VIP button successfully!")
-            time.sleep(2)
+            time.sleep(3)
         else:
             print("✗ Could not find Join VIP button")
 
     except Exception as e:
         print(f"Error clicking Join VIP button: {e}")
 
-    # Step 19: Wait for payment redirect
+    # Step 19: Wait for payment tab and monitor for redirect
     print("\n" + "="*60)
-    print("✓ VIP subscription process initiated!")
-    print("Waiting for payment completion...")
+    print("✓ Payment tab should open now!")
+    print("Please complete the payment in the new tab...")
+    print("Waiting for redirect to payResult page...")
     print("="*60)
 
-    # Monitor for redirect
+    # Monitor for new window/tab and wait for redirect
     start_time = time.time()
-    max_wait = 300  # 5 minutes max wait
-
+    max_wait = 600  # 10 minutes max wait
+    payment_tab = None
     payment_completed = False
+
     while True:
-        current_url = driver.current_url
+        try:
+            # Get all window handles
+            all_windows = driver.window_handles
 
-        # Check if redirected to payResult page
-        if 'iq.com/vip/payResult' in current_url:
-            print(f"\n✓ Payment completed! Redirected to: {current_url}")
-            payment_completed = True
-            break
+            # Check if there's a new window/tab
+            if len(all_windows) > 1:
+                # Find the new tab (not the original)
+                for window in all_windows:
+                    if window != original_window:
+                        payment_tab = window
+                        break
 
-        # Check if redirected back to iq.com (alternative)
-        if 'iq.com' in current_url and 'cashier' not in current_url.lower() and 'payResult' not in current_url:
-            print(f"\n✓ Redirected back to iq.com!")
-            print(f"Current URL: {current_url}")
-            break
+                if payment_tab:
+                    # Switch to payment tab to check URL
+                    driver.switch_to.window(payment_tab)
+                    current_url = driver.current_url
 
-        # Check elapsed time
-        elapsed = time.time() - start_time
-        if elapsed > max_wait:
-            print(f"\n⚠ Maximum wait time ({max_wait}s) reached")
-            break
+                    # Check if redirected to payResult page
+                    if 'iq.com/vip/payResult' in current_url:
+                        print(f"\n✓ Payment completed! Detected redirect to: {current_url}")
+                        print("✓ Staying in payment result tab to continue cancellation...")
+                        payment_completed = True
+                        break
 
-        time.sleep(1)
+                    # Show current payment URL
+                    if 'payment-service-th.line-apps.com' in current_url or 'line-apps.com' in current_url:
+                        elapsed = time.time() - start_time
+                        if int(elapsed) % 10 == 0:  # Print every 10 seconds
+                            print(f"⏳ Payment in progress... ({int(elapsed)}s elapsed)")
+            else:
+                # No second tab yet, check main window
+                current_url = driver.current_url
+                if 'iq.com/vip/payResult' in current_url:
+                    print(f"\n✓ Payment completed in main tab! Redirected to: {current_url}")
+                    payment_completed = True
+                    break
+
+            # Check elapsed time
+            elapsed = time.time() - start_time
+            if elapsed > max_wait:
+                print(f"\n⚠ Maximum wait time ({max_wait}s) reached")
+                break
+
+            time.sleep(2)
+
+        except Exception as e:
+            print(f"⚠ Error monitoring payment: {e}")
+            time.sleep(2)
+
+    if not payment_completed:
+        print("\n⚠ Payment monitoring timed out or failed")
+        return False
 
     # Step 20: Navigate to autorenew page and cancel subscription
     try:
@@ -793,68 +831,79 @@ def process_single_email(driver, wait, current_email_data, url):
 
 def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
     """Worker thread that processes emails from the queue"""
-    driver = None
-    try:
-        # Initialize the Chrome driver
-        driver = webdriver.Chrome(options=chrome_options)
-        wait = WebDriverWait(driver, 6)
+    window_width = 780
+    window_height = 700
+    x_position = thread_id * window_width
+    y_position = 0
 
-        # Get screen dimensions and calculate window position
-        window_width = 780
-        window_height = 700
-
-        # Position each browser window side by side (left and right)
-        x_position = thread_id * window_width
-        y_position = 0
-        driver.set_window_size(window_width, window_height)
-        driver.set_window_position(x_position, y_position)
-        print(f"[Thread {thread_id}] Browser window set to {window_width}x{window_height} at position ({x_position}, {y_position})")
-
-        # Process emails from the queue
-        while True:
+    # Process emails from the queue
+    while True:
+        driver = None
+        try:
+            # Get next email from queue (non-blocking with timeout)
             try:
-                # Get next email from queue (non-blocking with timeout)
                 current_email_data = email_queue.get(timeout=1)
-
-                if current_email_data is None:  # Sentinel value to stop thread
-                    break
-
-                print(f"\n[Thread {thread_id}] {'='*60}")
-                print(f"[Thread {thread_id}] Processing: {current_email_data['email']}")
-                print(f"[Thread {thread_id}] {'='*60}\n")
-
-                # Process the email
-                success = process_single_email(driver, wait, current_email_data, url)
-
-                if success:
-                    results_queue.put({
-                        'success': True,
-                        'email_data': current_email_data,
-                        'thread_id': thread_id
-                    })
-                else:
-                    results_queue.put({
-                        'success': False,
-                        'email_data': current_email_data,
-                        'thread_id': thread_id
-                    })
-
-                email_queue.task_done()
-
-            except Exception as e:
-                print(f"[Thread {thread_id}] Error: {str(e)}")
+            except:
                 continue
 
-    except Exception as e:
-        print(f"[Thread {thread_id}] Fatal error: {str(e)}")
-    finally:
-        if driver:
-            try:
-                print(f"\n[Thread {thread_id}] Closing browser...")
-                driver.quit()
-                print(f"[Thread {thread_id}] Browser closed.")
-            except:
-                pass
+            if current_email_data is None:  # Sentinel value to stop thread
+                email_queue.task_done()
+                break
+
+            print(f"\n[Thread {thread_id}] {'='*60}")
+            print(f"[Thread {thread_id}] Opening new browser for: {current_email_data['email']}")
+            print(f"[Thread {thread_id}] {'='*60}\n")
+
+            # Initialize a fresh Chrome driver for this email
+            driver = webdriver.Chrome(options=chrome_options)
+            wait = WebDriverWait(driver, 6)
+
+            # Position the browser window
+            driver.set_window_size(window_width, window_height)
+            driver.set_window_position(x_position, y_position)
+            print(f"[Thread {thread_id}] Browser window set to {window_width}x{window_height} at position ({x_position}, {y_position})")
+
+            # Process the email
+            success = process_single_email(driver, wait, current_email_data, url)
+
+            if success:
+                results_queue.put({
+                    'success': True,
+                    'email_data': current_email_data,
+                    'thread_id': thread_id
+                })
+            else:
+                results_queue.put({
+                    'success': False,
+                    'email_data': current_email_data,
+                    'thread_id': thread_id
+                })
+
+            email_queue.task_done()
+
+            # Close browser after processing this email
+            if driver:
+                try:
+                    print(f"\n[Thread {thread_id}] Closing browser for {current_email_data['email']}...")
+                    driver.quit()
+                    print(f"[Thread {thread_id}] Browser closed. Ready for next email.\n")
+                    driver = None
+                except Exception as close_error:
+                    print(f"[Thread {thread_id}] Error closing browser: {close_error}")
+
+            # Small delay before opening next browser
+            time.sleep(2)
+
+        except Exception as e:
+            print(f"[Thread {thread_id}] Error: {str(e)}")
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+            continue
+
+    print(f"[Thread {thread_id}] Worker thread finished.")
 
 
 def main():
