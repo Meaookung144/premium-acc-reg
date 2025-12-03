@@ -21,6 +21,7 @@ from queue import Queue
 PASSWORD = "mission67"  # Set your password here
 EMAILS_FILE = "emails.txt"  # File containing emails (one per line)
 NUM_PARALLEL_BROWSERS = 2  # Number of browsers to run in parallel
+AUTO_OTP = False  # Set to True for automatic OTP fetching, False for manual entry
 
 # Month names
 MONTHS = ["January", "February", "March", "April", "May", "June",
@@ -459,107 +460,192 @@ def process_single_email(driver, wait, current_email_data, url):
     max_otp_retries = 3
     otp_verified = False
 
-    for otp_attempt in range(max_otp_retries):
+    if AUTO_OTP:
+        # Automatic OTP mode - fetch OTP from read-mail.me API
         print(f"\n{'='*60}")
-        print(f"OTP ATTEMPT {otp_attempt + 1}/{max_otp_retries}")
+        print("AUTO OTP MODE: ENABLED")
+        print("Automatically fetching OTP codes from read-mail.me API")
         print(f"{'='*60}")
 
-        # Fetch OTP code from read-mail.me
-        otp_code = get_otp_code(
-            current_email_data['email'],
-            current_email_data['refresh_token'],
-            current_email_data['client_id']
-        )
+        for otp_attempt in range(max_otp_retries):
+            print(f"\n{'='*60}")
+            print(f"OTP ATTEMPT {otp_attempt + 1}/{max_otp_retries}")
+            print(f"{'='*60}")
 
-        if not otp_code:
-            print("✗ Failed to get OTP code.")
-            if otp_attempt < max_otp_retries - 1:
-                print("Retrying OTP fetch...")
-                continue
-            else:
-                print("✗ Failed to get OTP code after all attempts. Cannot proceed with verification.")
-                return False
+            # Fetch OTP code from read-mail.me
+            otp_code = get_otp_code(
+                current_email_data['email'],
+                current_email_data['refresh_token'],
+                current_email_data['client_id']
+            )
 
-        # Step 12: Enter OTP code
-        try:
-            print("\nStep 11: Entering OTP code...")
-            otp_input = wait.until(EC.presence_of_element_located(
-                (By.CSS_SELECTOR, "input[type='text'][maxlength='6'].passport-input__input")
-            ))
-            otp_input.clear()
-            otp_input.send_keys(otp_code)
-            print(f"✓ Entered OTP code: {otp_code}")
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"Error entering OTP code: {e}")
-            if otp_attempt < max_otp_retries - 1:
-                continue
-
-        # Step 13: Click Verify button
-        try:
-            print("\nStep 12: Clicking Verify button...")
-            verify_button = None
-            verify_selectors = [
-                (By.XPATH, "//div[contains(@class, 'passport-btn-primary') and contains(text(), 'Verify')]"),
-                (By.CSS_SELECTOR, "div.passport-btn.passport-btn-primary"),
-                (By.XPATH, "//div[contains(@class, 'passport-btn') and contains(text(), 'Verify')]")
-            ]
-
-            for by, selector in verify_selectors:
-                try:
-                    verify_button = wait.until(EC.element_to_be_clickable((by, selector)))
-                    if verify_button:
-                        print(f"Found Verify button using: {selector}")
-                        break
-                except:
-                    continue
-
-            if verify_button:
-                verify_button.click()
-                print("✓ Clicked Verify button successfully!")
-                time.sleep(2)
-            else:
-                print("✗ Could not find Verify button")
-
-        except Exception as e:
-            print(f"Error clicking Verify button: {e}")
-
-        # Step 13.5: Check for "Invalid verification code" error
-        try:
-            print("\nChecking for verification errors...")
-            error_element = driver.find_element(By.CSS_SELECTOR, "p.passport-input__error")
-            error_text = error_element.text.strip()
-
-            if "Invalid verification code" in error_text or "invalid" in error_text.lower():
-                print(f"✗ Verification failed: {error_text}")
+            if not otp_code:
+                print("✗ Failed to get OTP code.")
                 if otp_attempt < max_otp_retries - 1:
-                    print("Retrying with a new OTP code...")
-                    time.sleep(2)
+                    print("Retrying OTP fetch...")
                     continue
                 else:
-                    print("✗ Failed to verify OTP after all attempts")
+                    print("✗ Failed to get OTP code after all attempts. Cannot proceed with verification.")
                     return False
-            else:
-                print(f"⚠ Found error message but not about invalid code: {error_text}")
+
+            # Step 12: Enter OTP code
+            try:
+                print("\nStep 11: Entering OTP code...")
+                otp_input = wait.until(EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "input[type='text'][maxlength='6'].passport-input__input")
+                ))
+                otp_input.clear()
+                otp_input.send_keys(otp_code)
+                print(f"✓ Entered OTP code: {otp_code}")
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"Error entering OTP code: {e}")
+                if otp_attempt < max_otp_retries - 1:
+                    continue
+
+            # Step 13: Click Verify button
+            try:
+                print("\nStep 12: Clicking Verify button...")
+                verify_button = None
+                verify_selectors = [
+                    (By.XPATH, "//div[contains(@class, 'passport-btn-primary') and contains(text(), 'Verify')]"),
+                    (By.CSS_SELECTOR, "div.passport-btn.passport-btn-primary"),
+                    (By.XPATH, "//div[contains(@class, 'passport-btn') and contains(text(), 'Verify')]")
+                ]
+
+                for by, selector in verify_selectors:
+                    try:
+                        verify_button = wait.until(EC.element_to_be_clickable((by, selector)))
+                        if verify_button:
+                            print(f"Found Verify button using: {selector}")
+                            break
+                    except:
+                        continue
+
+                if verify_button:
+                    verify_button.click()
+                    print("✓ Clicked Verify button successfully!")
+                    time.sleep(2)
+                else:
+                    print("✗ Could not find Verify button")
+
+            except Exception as e:
+                print(f"Error clicking Verify button: {e}")
+
+            # Step 13.5: Check for "Invalid verification code" error
+            try:
+                print("\nChecking for verification errors...")
+                error_element = driver.find_element(By.CSS_SELECTOR, "p.passport-input__error")
+                error_text = error_element.text.strip()
+
+                if "Invalid verification code" in error_text or "invalid" in error_text.lower():
+                    print(f"✗ Verification failed: {error_text}")
+                    if otp_attempt < max_otp_retries - 1:
+                        print("Retrying with a new OTP code...")
+                        time.sleep(2)
+                        continue
+                    else:
+                        print("✗ Failed to verify OTP after all attempts")
+                        return False
+                else:
+                    print(f"⚠ Found error message but not about invalid code: {error_text}")
+                    otp_verified = True
+                    break
+
+            except Exception as e:
+                # No error found - verification successful
+                print("✓ No error message found - OTP verification successful!")
                 otp_verified = True
                 break
 
-        except Exception as e:
-            # No error found - verification successful
-            print("✓ No error message found - OTP verification successful!")
-            otp_verified = True
-            break
+        if not otp_verified:
+            print("✗ OTP verification failed after all attempts")
+            return False
 
-    if not otp_verified:
-        print("✗ OTP verification failed after all attempts")
-        return False
+        print("✓ Proceeding to next step...")
+        time.sleep(3)
+
+    else:
+        # Manual OTP mode - user enters code themselves
+        print(f"\n{'='*60}")
+        print("AUTO OTP MODE: DISABLED")
+        print("Please manually enter the OTP code in the browser")
+        print("The script will wait for you to complete verification")
+        print(f"{'='*60}")
+
+        # Wait for OTP input field to appear
+        try:
+            print("\nStep 11: Waiting for OTP input field...")
+            otp_input = wait.until(EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "input[type='text'][maxlength='6'].passport-input__input")
+            ))
+            print("✓ OTP input field is ready")
+            print("\n" + "="*60)
+            print("MANUAL OTP ENTRY REQUIRED")
+            print("="*60)
+            print(f"Email: {current_email_data['email']}")
+            print("Please:")
+            print("  1. Check your email for the OTP code")
+            print("  2. Enter the code in the browser")
+            print("  3. Click the Verify button")
+            print("\nWaiting for verification to complete...")
+            print("="*60)
+        except Exception as e:
+            print(f"Error finding OTP input field: {e}")
+            return False
+
+        # Wait for verification to complete (check if we move past OTP page)
+        # Monitor for successful navigation or error messages
+        verification_timeout = 300  # 5 minutes for manual entry
+        start_time = time.time()
+
+        while time.time() - start_time < verification_timeout:
+            try:
+                # Check if verification error appears
+                try:
+                    error_element = driver.find_element(By.CSS_SELECTOR, "p.passport-input__error")
+                    error_text = error_element.text.strip()
+                    if error_text and "invalid" in error_text.lower():
+                        print(f"\n⚠ Verification error detected: {error_text}")
+                        print("Please try entering the OTP code again...")
+                        time.sleep(2)
+                        continue
+                except:
+                    pass
+
+                # Check if we've moved past the OTP page (successful verification)
+                # Try to find the next step elements
+                try:
+                    # If we can't find the OTP input anymore, verification likely succeeded
+                    driver.find_element(By.CSS_SELECTOR, "input[type='text'][maxlength='6'].passport-input__input")
+                    # Still on OTP page, keep waiting
+                    time.sleep(2)
+                except:
+                    # OTP input not found - likely moved to next page
+                    print("\n✓ OTP verification appears to be complete!")
+                    otp_verified = True
+                    break
+
+            except Exception as e:
+                # If we get any unexpected state, assume verification completed
+                print(f"\n✓ OTP page state changed - verification likely complete")
+                otp_verified = True
+                break
+
+        if not otp_verified:
+            print(f"\n⚠ Manual OTP verification timeout after {verification_timeout}s")
+            print("Please ensure OTP was entered correctly")
+            return False
+
+        print("✓ Proceeding to next step...")
+        time.sleep(3)
 
     print("\n✓ Registration completed successfully!")
 
     # Step 14: Click VIP button
     try:
         print("\nStep 13: Clicking VIP button...")
-        time.sleep(2)  # Wait for page to settle after verification
+        time.sleep(3)  # Wait for page to settle after verification
 
         vip_button = None
         vip_selectors = [
@@ -568,13 +654,16 @@ def process_single_email(driver, wait, current_email_data, url):
             (By.CSS_SELECTOR, "a[alt='joinVIP']")
         ]
 
+        print("Searching for VIP button...")
         for by, selector in vip_selectors:
             try:
+                print(f"  Trying selector: {selector}")
                 vip_button = wait.until(EC.element_to_be_clickable((by, selector)))
                 if vip_button:
-                    print(f"Found VIP button using: {selector}")
+                    print(f"✓ Found VIP button using: {selector}")
                     break
-            except:
+            except Exception as e:
+                print(f"  ✗ Not found with this selector: {str(e)[:50]}")
                 continue
 
         if vip_button:
@@ -582,7 +671,8 @@ def process_single_email(driver, wait, current_email_data, url):
             print("✓ Clicked VIP button successfully!")
             time.sleep(1)
         else:
-            print("✗ Could not find VIP button")
+            print("✗ Could not find VIP button with any selector")
+            print(f"Current URL: {driver.current_url}")
 
     except Exception as e:
         print(f"Error clicking VIP button: {e}")
@@ -762,7 +852,7 @@ def process_single_email(driver, wait, current_email_data, url):
         driver.get("https://www.iq.com/vip/autorenew")
         wait_for_page_load(driver)
         print("✓ Loaded autorenew page")
-        time.sleep(2)
+        time.sleep(1)
 
     except Exception as e:
         print(f"Error navigating to autorenew page: {e}")
@@ -789,7 +879,7 @@ def process_single_email(driver, wait, current_email_data, url):
         if cancel_button:
             cancel_button.click()
             print("✓ Clicked Cancel Subscription button successfully!")
-            time.sleep(1)
+            time.sleep(0.5)
         else:
             print("✗ Could not find Cancel Subscription button")
 
@@ -818,7 +908,7 @@ def process_single_email(driver, wait, current_email_data, url):
         if confirm_cancel:
             confirm_cancel.click()
             print("✓ Confirmed cancellation successfully!")
-            time.sleep(2)
+            time.sleep(1)
         else:
             print("✗ Could not find confirm cancel link")
 
@@ -856,7 +946,7 @@ def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
 
             # Initialize a fresh Chrome driver for this email
             driver = webdriver.Chrome(options=chrome_options)
-            wait = WebDriverWait(driver, 6)
+            wait = WebDriverWait(driver, 20)
 
             # Position the browser window
             driver.set_window_size(window_width, window_height)
@@ -881,6 +971,21 @@ def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
 
             email_queue.task_done()
 
+            # Wait for user input before closing browser
+            print(f"\n[Thread {thread_id}] " + "="*60)
+            print(f"[Thread {thread_id}] Processing complete for {current_email_data['email']}")
+            print(f"[Thread {thread_id}] Browser will remain open for inspection")
+            print(f"[Thread {thread_id}] Press 'd' and Enter to close browser and continue...")
+            print(f"[Thread {thread_id}] " + "="*60)
+
+            while True:
+                user_input = input(f"[Thread {thread_id}] ").strip().lower()
+                if user_input == 'd':
+                    print(f"[Thread {thread_id}] ✓ Closing browser...")
+                    break
+                else:
+                    print(f"[Thread {thread_id}] Invalid input. Press 'd' and Enter to continue...")
+
             # Close browser after processing this email
             if driver:
                 try:
@@ -898,6 +1003,20 @@ def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
             print(f"[Thread {thread_id}] Error: {str(e)}")
             if driver:
                 try:
+                    # Wait for user input before closing browser (even on error)
+                    print(f"\n[Thread {thread_id}] " + "="*60)
+                    print(f"[Thread {thread_id}] Error occurred - Browser will remain open for inspection")
+                    print(f"[Thread {thread_id}] Press 'd' and Enter to close browser and continue...")
+                    print(f"[Thread {thread_id}] " + "="*60)
+
+                    while True:
+                        user_input = input(f"[Thread {thread_id}] ").strip().lower()
+                        if user_input == 'd':
+                            print(f"[Thread {thread_id}] ✓ Closing browser...")
+                            break
+                        else:
+                            print(f"[Thread {thread_id}] Invalid input. Press 'd' and Enter to continue...")
+
                     driver.quit()
                 except:
                     pass
