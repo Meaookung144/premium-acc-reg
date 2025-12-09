@@ -553,7 +553,7 @@ def main():
 
     # Set window size
     window_width = 780
-    window_height = 700
+    window_height = 600
 
     success_count = 0
     failed_count = 0

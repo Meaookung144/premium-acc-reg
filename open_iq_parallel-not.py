@@ -18,9 +18,9 @@ import threading
 from queue import Queue
 
 # Configuration
-PASSWORD = "alonso67"  # Set your password here
+PASSWORD = "salmon30"  # Set your password here
 EMAILS_FILE = "emails.txt"  # File containing emails (one per line)
-NUM_PARALLEL_BROWSERS = 2  # Number of browsers to run in parallel
+NUM_PARALLEL_BROWSERS = 3  # Number of browsers to run in parallel
 AUTO_OTP = True  # Set to True for automatic OTP fetching, False for manual entry
 
 # Month names
@@ -189,73 +189,43 @@ def process_single_email(driver, wait, current_email_data, url):
     print(f"Processing email: {current_email_data['email']}")
     print(f"{'='*60}")
 
-    # Navigate to iq.com
-    driver.get(url)
+    # Navigate to iq.com/login
+    driver.get("https://www.iq.com/login")
     wait_for_page_load(driver)
-    print(f"Successfully opened {url}")
+    print(f"Successfully opened https://www.iq.com/login")
     time.sleep(0.5)
 
-    # Step 1: Click the Login button
+    # Step 1: Click the Register button
     try:
-        print("\nStep 1: Looking for Login button...")
-        login_button = None
-        login_selectors = [
-            (By.CSS_SELECTOR, "div.userImg-wrap[role='button']"),
-            (By.CSS_SELECTOR, "div.userImg-wrap"),
-            (By.XPATH, "//div[@class='userImg-wrap' and @role='button']"),
-            (By.XPATH, "//div[contains(@class, 'login-button')]")
-        ]
-
-        for by, selector in login_selectors:
-            try:
-                login_button = wait.until(EC.element_to_be_clickable((by, selector)))
-                if login_button:
-                    print(f"Found login button using: {selector}")
-                    break
-            except:
-                continue
-
-        if login_button:
-            login_button.click()
-            print("✓ Clicked Login button successfully!")
-            time.sleep(0.5)
-        else:
-            print("✗ Could not find Login button")
-            raise Exception("Login button not found")
-
-    except Exception as e:
-        print(f"Error clicking login button: {e}")
-        raise
-
-    # Step 2: Click the Sign Up link
-    try:
-        print("\nStep 2: Looking for Sign Up link...")
-        signup_link = None
-        signup_selectors = [
+        print("\nStep 1: Looking for Register button...")
+        register_button = None
+        register_selectors = [
             (By.XPATH, "//span[contains(@class, 'passport-login-tip__link') and contains(text(), 'Sign Up')]"),
             (By.CSS_SELECTOR, "span.passport-login-tip__link"),
-            (By.XPATH, "//span[contains(text(), 'Sign Up')]")
+            (By.XPATH, "//span[contains(text(), 'Sign Up')]"),
+            (By.XPATH, "//a[contains(text(), 'Register')]"),
+            (By.XPATH, "//button[contains(text(), 'Register')]")
         ]
 
-        for by, selector in signup_selectors:
+        for by, selector in register_selectors:
             try:
-                signup_link = wait.until(EC.element_to_be_clickable((by, selector)))
-                if signup_link:
-                    print(f"Found Sign Up link using: {selector}")
+                register_button = wait.until(EC.element_to_be_clickable((by, selector)))
+                if register_button:
+                    print(f"Found Register button using: {selector}")
                     break
             except:
                 continue
 
-        if signup_link:
-            signup_link.click()
-            print("✓ Clicked Sign Up link successfully!")
+        if register_button:
+            register_button.click()
+            print("✓ Clicked Register button successfully!")
             time.sleep(0.5)
         else:
-            print("✗ Could not find Sign Up link")
-            raise Exception("Sign Up link not found")
+            print("✗ Could not find Register button")
+            raise Exception("Register button not found")
 
     except Exception as e:
-        print(f"Error clicking Sign Up link: {e}")
+        print(f"Error clicking Register button: {e}")
         raise
 
     # Step 3: Click the "Sign up with Email" button
@@ -476,10 +446,8 @@ def process_single_email(driver, wait, current_email_data, url):
     print("\n✓ Form filled and submitted successfully!")
 
     # Step 11: OTP verification with retry logic
-    max_otp_retries = 10  # Increased retry limit
+    max_otp_retries = 3
     otp_verified = False
-    otp_start_time = time.time()
-    last_otp_code = None
 
     if AUTO_OTP:
         # Automatic OTP mode - fetch OTP from read-mail.me API
@@ -493,39 +461,6 @@ def process_single_email(driver, wait, current_email_data, url):
             print(f"OTP ATTEMPT {otp_attempt + 1}/{max_otp_retries}")
             print(f"{'='*60}")
 
-            # Check if we need to click resend OTP (after 70 seconds)
-            elapsed_time = time.time() - otp_start_time
-            if elapsed_time > 70:
-                print(f"\n⚠ More than 70 seconds elapsed ({elapsed_time:.1f}s), clicking resend OTP...")
-                try:
-                    resend_selectors = [
-                        (By.XPATH, "//span[contains(text(), 'Resend')]"),
-                        (By.XPATH, "//span[contains(text(), 'resend')]"),
-                        (By.XPATH, "//a[contains(text(), 'Resend')]"),
-                        (By.CSS_SELECTOR, "span.resend-link"),
-                        (By.XPATH, "//div[contains(@class, 'resend')]")
-                    ]
-
-                    resend_clicked = False
-                    for by, selector in resend_selectors:
-                        try:
-                            resend_button = WebDriverWait(driver, 3).until(
-                                EC.element_to_be_clickable((by, selector))
-                            )
-                            resend_button.click()
-                            print("✓ Clicked resend OTP button")
-                            resend_clicked = True
-                            otp_start_time = time.time()  # Reset timer
-                            time.sleep(2)
-                            break
-                        except:
-                            continue
-
-                    if not resend_clicked:
-                        print("⚠ Could not find resend OTP button")
-                except Exception as e:
-                    print(f"⚠ Error clicking resend OTP: {e}")
-
             # Fetch OTP code from read-mail.me
             otp_code = get_otp_code(
                 current_email_data['email'],
@@ -536,20 +471,11 @@ def process_single_email(driver, wait, current_email_data, url):
             if not otp_code:
                 print("✗ Failed to get OTP code.")
                 if otp_attempt < max_otp_retries - 1:
-                    print("Waiting 5 seconds before retrying OTP fetch...")
-                    time.sleep(5)
+                    print("Retrying OTP fetch...")
                     continue
                 else:
                     print("✗ Failed to get OTP code after all attempts. Cannot proceed with verification.")
                     return False
-
-            # Check if this is a new OTP code (different from last attempt)
-            if last_otp_code and otp_code == last_otp_code:
-                print(f"⚠ Got same OTP code as before ({otp_code}), waiting for new code...")
-                time.sleep(5)
-                continue
-
-            last_otp_code = otp_code
 
             # Step 12: Enter OTP code
             try:
@@ -603,9 +529,13 @@ def process_single_email(driver, wait, current_email_data, url):
 
                 if "Invalid verification code" in error_text or "invalid" in error_text.lower():
                     print(f"✗ Verification failed: {error_text}")
-                    print("Will re-fetch OTP from email and retry...")
-                    time.sleep(3)
-                    continue
+                    if otp_attempt < max_otp_retries - 1:
+                        print("Retrying with a new OTP code...")
+                        time.sleep(2)
+                        continue
+                    else:
+                        print("✗ Failed to verify OTP after all attempts")
+                        return False
                 else:
                     print(f"⚠ Found error message but not about invalid code: {error_text}")
                     otp_verified = True
@@ -980,11 +910,6 @@ def process_single_email(driver, wait, current_email_data, url):
 
 def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
     """Worker thread that processes emails from the queue"""
-    window_width = 780
-    window_height = 600
-    x_position = thread_id * window_width
-    y_position = 0
-
     # Process emails from the queue
     while True:
         driver = None
@@ -1006,6 +931,14 @@ def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
             # Initialize a fresh Chrome driver for this email
             driver = webdriver.Chrome(options=chrome_options)
             wait = WebDriverWait(driver, 20)
+
+            # Get screen dimensions and set window to 1/3 width and full height
+            screen_width = driver.execute_script("return window.screen.width;")
+            screen_height = driver.execute_script("return window.screen.height;")
+            window_width = screen_width // 3
+            window_height = screen_height
+            x_position = thread_id * window_width
+            y_position = 0
 
             # Position the browser window
             driver.set_window_size(window_width, window_height)
