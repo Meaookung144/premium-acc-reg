@@ -16,16 +16,302 @@ import requests
 from datetime import datetime
 import threading
 from queue import Queue
+import imaplib
+import email as email_module
+import socket
+import re
+import os
+import zipfile
 
 # Configuration
-PASSWORD = "alonso67"  # Set your password here
+PASSWORD = "tomoru1x"  # Set your password here
 EMAILS_FILE = "emails.txt"  # File containing emails (one per line)
-NUM_PARALLEL_BROWSERS = 2  # Number of browsers to run in parallel
+NUM_PARALLEL_BROWSERS = 3  # Number of browsers to run in parallel
 AUTO_OTP = True  # Set to True for automatic OTP fetching, False for manual entry
+
+# ============================================================================
+# WEBMAIL CONFIGURATION
+# ============================================================================
+WEBMAIL_TYPE = "hotmail"  # Options: "pranakorn" or "hotmail"
+# - "pranakorn": Uses coaco.space IMAP (format: email|password)
+# - "hotmail": Uses read-mail.me API (format: email|password|refresh_token|client_id)
+
+# ============================================================================
+# PROXY CONFIGURATION
+# ============================================================================
+USE_PROXY = True  # Set to True to enable proxy support
+PROXY_FILE = "proxy.txt"  # File containing proxies (format: ip:port or user:pass@ip:port)
+PROXY_TYPE = "http"  # Options: "http", "https", "socks5"
+
+# IMAP Configuration for pranakorn emails
+IMAP_SERVER = "mail.coaco.space"
+OTP_POLL_INTERVAL = 0.5  # Poll every 500ms for pranakorn
 
 # Month names
 MONTHS = ["January", "February", "March", "April", "May", "June",
           "July", "August", "September", "October", "November", "December"]
+
+# Proxy queue for thread-safe proxy rotation
+proxy_queue = Queue()
+proxy_lock = threading.Lock()
+
+
+def load_proxies(filename):
+    """Load proxies from file"""
+    proxies = []
+    try:
+        with open(filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    proxies.append(line)
+        print(f"✓ Loaded {len(proxies)} proxy/proxies from {filename}")
+    except FileNotFoundError:
+        print(f"⚠ Proxy file not found: {filename}")
+    return proxies
+
+
+def create_proxy_extension(proxy_host, proxy_port, proxy_user=None, proxy_pass=None):
+    """Create a Chrome extension for authenticated proxy"""
+    manifest_json = """
+    {
+        "version": "1.0.0",
+        "manifest_version": 2,
+        "name": "Chrome Proxy",
+        "permissions": [
+            "proxy",
+            "tabs",
+            "unlimitedStorage",
+            "storage",
+            "<all_urls>",
+            "webRequest",
+            "webRequestBlocking"
+        ],
+        "background": {
+            "scripts": ["background.js"]
+        },
+        "minimum_chrome_version":"22.0.0"
+    }
+    """
+
+    if proxy_user and proxy_pass:
+        # Authenticated proxy
+        background_js = """
+        var config = {
+                mode: "fixed_servers",
+                rules: {
+                  singleProxy: {
+                    scheme: "http",
+                    host: "%s",
+                    port: parseInt(%s)
+                  },
+                  bypassList: ["localhost"]
+                }
+              };
+
+        chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+
+        function callbackFn(details) {
+            return {
+                authCredentials: {
+                    username: "%s",
+                    password: "%s"
+                }
+            };
+        }
+
+        chrome.webRequest.onAuthRequired.addListener(
+                    callbackFn,
+                    {urls: ["<all_urls>"]},
+                    ['blocking']
+        );
+        """ % (proxy_host, proxy_port, proxy_user, proxy_pass)
+    else:
+        # Non-authenticated proxy
+        background_js = """
+        var config = {
+                mode: "fixed_servers",
+                rules: {
+                  singleProxy: {
+                    scheme: "http",
+                    host: "%s",
+                    port: parseInt(%s)
+                  },
+                  bypassList: ["localhost"]
+                }
+              };
+
+        chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+        """ % (proxy_host, proxy_port)
+
+    plugin_file = f'proxy_auth_plugin_{proxy_host}_{proxy_port}.zip'
+
+    with zipfile.ZipFile(plugin_file, 'w') as zp:
+        zp.writestr("manifest.json", manifest_json)
+        zp.writestr("background.js", background_js)
+
+    return plugin_file
+
+
+def extract_otp(text):
+    """Extract OTP code from text (typically 4-8 digits)"""
+    if not text:
+        return None
+
+    # Look for patterns like "220446 is your", "code: 123456", "OTP: 123456", etc.
+    patterns = [
+        r'\b(\d{4,8})\s+is\s+your',  # "220446 is your dynamic security verification code"
+        r'code[:\s]+(\d{4,8})',       # "code: 123456" or "code 123456"
+        r'otp[:\s]+(\d{4,8})',        # "OTP: 123456" or "OTP 123456"
+        r'verification[:\s]+(\d{4,8})', # "verification: 123456"
+        r'\b(\d{6})\b',               # Any standalone 6-digit number
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    return None
+
+
+def get_otp_pranakorn(email_address, email_password, max_retries=40):
+    """
+    Fetch OTP code from pranakorn/coaco.space email via IMAP
+    Polls every 500ms for up to 40 attempts (20 seconds total)
+    """
+    print(f"\n{'='*60}")
+    print(f"Fetching OTP code for {email_address} via IMAP")
+    print(f"Will poll every {OTP_POLL_INTERVAL}s up to {max_retries} times")
+    print(f"{'='*60}")
+
+    for attempt in range(max_retries):
+        try:
+            print(f"\n[Attempt {attempt + 1}/{max_retries}] Connecting to IMAP...")
+
+            # Try SSL connection
+            try:
+                sock = socket.create_connection((IMAP_SERVER, 993), timeout=5)
+                sock.close()
+                mail = imaplib.IMAP4_SSL(IMAP_SERVER, 993)
+            except:
+                # Fallback to STARTTLS
+                try:
+                    mail = imaplib.IMAP4(IMAP_SERVER, 143)
+                    mail.starttls()
+                except Exception as e:
+                    print(f"✗ Connection failed: {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(OTP_POLL_INTERVAL)
+                    continue
+
+            # Login
+            try:
+                mail.login(email_address, email_password)
+                print(f"✓ Logged in to {IMAP_SERVER}")
+            except Exception as e:
+                print(f"✗ Login failed: {e}")
+                try:
+                    mail.logout()
+                except:
+                    pass
+                if attempt < max_retries - 1:
+                    time.sleep(OTP_POLL_INTERVAL)
+                continue
+
+            # Select inbox
+            mail.select("INBOX")
+
+            # Search for all emails
+            status, messages = mail.search(None, "ALL")
+            if status != "OK":
+                print(f"✗ Failed to search emails")
+                mail.logout()
+                if attempt < max_retries - 1:
+                    time.sleep(OTP_POLL_INTERVAL)
+                continue
+
+            # Get the latest email
+            email_ids = messages[0].split()
+            if not email_ids:
+                print(f"✗ No emails found in inbox")
+                mail.logout()
+                if attempt < max_retries - 1:
+                    time.sleep(OTP_POLL_INTERVAL)
+                continue
+
+            latest_email_id = email_ids[-1]
+
+            # Fetch the email
+            status, msg_data = mail.fetch(latest_email_id, "(RFC822)")
+            if status != "OK":
+                print(f"✗ Failed to fetch email")
+                mail.logout()
+                if attempt < max_retries - 1:
+                    time.sleep(OTP_POLL_INTERVAL)
+                continue
+
+            # Parse email
+            for response_part in msg_data:
+                if isinstance(response_part, tuple):
+                    msg = email_module.message_from_bytes(response_part[1])
+
+                    # Get subject
+                    subject = msg.get("Subject", "")
+                    from_addr = msg.get("From", "")
+
+                    print(f"✓ Latest email from: {from_addr}")
+                    print(f"  Subject: {subject}")
+
+                    # Check if from iQIYI
+                    if "iq.com" not in from_addr.lower() and "iqiyi" not in from_addr.lower():
+                        print(f"✗ Email not from iQIYI, waiting for new email...")
+                        mail.logout()
+                        if attempt < max_retries - 1:
+                            time.sleep(OTP_POLL_INTERVAL)
+                        continue
+
+                    # Try to extract OTP from subject first
+                    otp_code = extract_otp(subject)
+
+                    # If not in subject, check body
+                    if not otp_code and msg.is_multipart():
+                        for part in msg.walk():
+                            if part.get_content_type() == "text/plain":
+                                try:
+                                    body = part.get_payload(decode=True).decode()
+                                    otp_code = extract_otp(body)
+                                    if otp_code:
+                                        break
+                                except:
+                                    pass
+                    elif not otp_code:
+                        try:
+                            body = msg.get_payload(decode=True).decode()
+                            otp_code = extract_otp(body)
+                        except:
+                            pass
+
+                    if otp_code:
+                        print(f"✓ Found OTP code: {otp_code}")
+                        mail.logout()
+                        return otp_code
+                    else:
+                        print(f"✗ No OTP found in email")
+
+            mail.logout()
+
+            if attempt < max_retries - 1:
+                time.sleep(OTP_POLL_INTERVAL)
+
+        except Exception as e:
+            print(f"✗ Error reading email: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(OTP_POLL_INTERVAL)
+
+    print(f"\n✗ Failed to get OTP after {max_retries} attempts")
+    return None
+
 
 def wait_for_page_load(driver, timeout=10):
     """Wait for page to complete loading"""
@@ -34,23 +320,40 @@ def wait_for_page_load(driver, timeout=10):
     )
 
 def read_emails(filename):
-    """Read emails from text file (format: email|password|refresh_token|client_id)"""
+    """Read emails from text file
+    Format depends on WEBMAIL_TYPE:
+    - pranakorn: email|password
+    - hotmail: email|password|refresh_token|client_id
+    """
     try:
         with open(filename, 'r') as f:
             email_data = []
             for line in f:
                 line = line.strip()
-                if line:
+                if line and not line.startswith('#'):
                     # Split by | and extract all parts
                     parts = line.split('|')
-                    if len(parts) >= 4:
-                        email_info = {
-                            'email': parts[0].strip(),
-                            'password': parts[1].strip(),
-                            'refresh_token': parts[2].strip(),
-                            'client_id': parts[3].strip()
-                        }
-                        email_data.append(email_info)
+
+                    if WEBMAIL_TYPE == "pranakorn":
+                        # Format: email|password
+                        if len(parts) >= 2:
+                            email_info = {
+                                'email': parts[0].strip(),
+                                'password': parts[1].strip(),
+                                'refresh_token': None,
+                                'client_id': None
+                            }
+                            email_data.append(email_info)
+                    else:  # hotmail
+                        # Format: email|password|refresh_token|client_id
+                        if len(parts) >= 4:
+                            email_info = {
+                                'email': parts[0].strip(),
+                                'password': parts[1].strip(),
+                                'refresh_token': parts[2].strip(),
+                                'client_id': parts[3].strip()
+                            }
+                            email_data.append(email_info)
         return email_data
     except FileNotFoundError:
         print(f"Error: {filename} not found!")
@@ -184,7 +487,12 @@ def remove_from_emails_file(email_to_remove, filename):
         print(f"Error removing from {filename}: {e}")
 
 def process_single_email(driver, wait, current_email_data, url):
-    """Process a single email through the entire registration flow"""
+    """Process a single email through the entire registration flow
+    Returns:
+        True - Success
+        False - Permanent failure
+        'retry' - Connection not secure, should retry entire process
+    """
     print(f"\n{'='*60}")
     print(f"Processing email: {current_email_data['email']}")
     print(f"{'='*60}")
@@ -466,7 +774,21 @@ def process_single_email(driver, wait, current_email_data, url):
         if signup_submit_button:
             signup_submit_button.click()
             print("✓ Clicked Sign Up submit button successfully!")
-            time.sleep(1)
+            time.sleep(2)  # Wait for potential error toast
+
+            # Check for "Connection is not secure" error
+            try:
+                error_toast = driver.find_element(By.CSS_SELECTOR, "p.passport-toast-txt")
+                error_text = error_toast.text.strip()
+                if "Connection is not secure" in error_text or "not secure" in error_text.lower():
+                    print(f"\n{'='*60}")
+                    print("⚠ ERROR: Connection is not secure")
+                    print(f"⚠ Message: {error_text}")
+                    print("⚠ Will restart registration process for this account")
+                    print(f"{'='*60}")
+                    return 'retry'  # Signal to restart the entire registration process
+            except:
+                pass  # No error toast found, continue normally
         else:
             print("✗ Could not find Sign Up submit button")
 
@@ -526,11 +848,19 @@ def process_single_email(driver, wait, current_email_data, url):
                 except Exception as e:
                     print(f"⚠ Error clicking resend OTP: {e}")
 
-            # Fetch OTP code from read-mail.me
-            otp_code = get_otp_code(
-                current_email_data['email'],
-                current_email_data['refresh_token'],
-                current_email_data['client_id']
+            # Fetch OTP code based on webmail type
+            if WEBMAIL_TYPE == "pranakorn":
+                # Use IMAP for pranakorn/coaco.space emails
+                otp_code = get_otp_pranakorn(
+                    current_email_data['email'],
+                    current_email_data['password']
+                )
+            else:
+                # Use read-mail.me API for hotmail
+                otp_code = get_otp_code(
+                    current_email_data['email'],
+                    current_email_data['refresh_token'],
+                    current_email_data['client_id']
             )
 
             if not otp_code:
@@ -589,6 +919,20 @@ def process_single_email(driver, wait, current_email_data, url):
                     verify_button.click()
                     print("✓ Clicked Verify button successfully!")
                     time.sleep(2)
+
+                    # Check for "Connection is not secure" error
+                    try:
+                        error_toast = driver.find_element(By.CSS_SELECTOR, "p.passport-toast-txt")
+                        error_text = error_toast.text.strip()
+                        if "Connection is not secure" in error_text or "not secure" in error_text.lower():
+                            print(f"\n{'='*60}")
+                            print("⚠ ERROR: Connection is not secure")
+                            print(f"⚠ Message: {error_text}")
+                            print("⚠ Will restart registration process for this account")
+                            print(f"{'='*60}")
+                            return 'retry'  # Signal to restart the entire registration process
+                    except:
+                        pass  # No error toast found, continue normally
                 else:
                     print("✗ Could not find Verify button")
 
@@ -602,10 +946,14 @@ def process_single_email(driver, wait, current_email_data, url):
                 error_text = error_element.text.strip()
 
                 if "Invalid verification code" in error_text or "invalid" in error_text.lower():
-                    print(f"✗ Verification failed: {error_text}")
-                    print("Will re-fetch OTP from email and retry...")
+                    print(f"\n{'='*60}")
+                    print(f"✗ INVALID OTP CODE DETECTED")
+                    print(f"✗ Error message: {error_text}")
+                    print(f"✓ Will re-read OTP from {'IMAP server' if WEBMAIL_TYPE == 'pranakorn' else 'API'} and retry...")
+                    print(f"✓ Attempt {otp_attempt + 1}/{max_otp_retries}")
+                    print(f"{'='*60}")
                     time.sleep(3)
-                    continue
+                    continue  # Loop back to fetch fresh OTP
                 else:
                     print(f"⚠ Found error message but not about invalid code: {error_text}")
                     otp_verified = True
@@ -708,8 +1056,9 @@ def process_single_email(driver, wait, current_email_data, url):
 
         vip_button = None
         vip_selectors = [
-            (By.CSS_SELECTOR, "a.user-level-tag[rseat='joinVIP']"),
-            (By.XPATH, "//a[@rseat='joinVIP']"),
+            (By.CSS_SELECTOR, "a.user-level-tag[alt='joinVIP']"),
+            (By.XPATH, "//a[@class='user-level-tag' and @alt='joinVIP']"),
+            (By.XPATH, "//a[@alt='joinVIP']"),
             (By.CSS_SELECTOR, "a[alt='joinVIP']")
         ]
 
@@ -978,7 +1327,7 @@ def process_single_email(driver, wait, current_email_data, url):
     return True
 
 
-def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
+def worker_thread(thread_id, email_queue, results_queue, url):
     """Worker thread that processes emails from the queue"""
     window_width = 780
     window_height = 600
@@ -988,6 +1337,7 @@ def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
     # Process emails from the queue
     while True:
         driver = None
+        current_proxy = None
         try:
             # Get next email from queue (non-blocking with timeout)
             try:
@@ -1003,6 +1353,40 @@ def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
             print(f"[Thread {thread_id}] Opening new browser for: {current_email_data['email']}")
             print(f"[Thread {thread_id}] {'='*60}\n")
 
+            # Create Chrome options for this browser instance
+            chrome_options = Options()
+
+            # Add proxy if enabled
+            if USE_PROXY:
+                try:
+                    with proxy_lock:
+                        if not proxy_queue.empty():
+                            current_proxy = proxy_queue.get()
+                            proxy_queue.put(current_proxy)  # Put it back for rotation
+
+                    if current_proxy:
+                        print(f"[Thread {thread_id}] Using proxy: {current_proxy}")
+
+                        # Parse proxy format: ip:port or user:pass@ip:port
+                        if '@' in current_proxy:
+                            # Authenticated proxy
+                            auth_part, server_part = current_proxy.split('@')
+                            proxy_user, proxy_pass = auth_part.split(':')
+                            proxy_host, proxy_port = server_part.split(':')
+
+                            # Create proxy extension
+                            proxy_extension = create_proxy_extension(
+                                proxy_host, proxy_port, proxy_user, proxy_pass
+                            )
+                            chrome_options.add_extension(proxy_extension)
+                        else:
+                            # Simple proxy without auth
+                            chrome_options.add_argument(f'--proxy-server={PROXY_TYPE}://{current_proxy}')
+                    else:
+                        print(f"[Thread {thread_id}] ⚠ No proxy available, running without proxy")
+                except Exception as e:
+                    print(f"[Thread {thread_id}] ⚠ Error setting up proxy: {e}")
+
             # Initialize a fresh Chrome driver for this email
             driver = webdriver.Chrome(options=chrome_options)
             wait = WebDriverWait(driver, 20)
@@ -1012,8 +1396,46 @@ def worker_thread(thread_id, email_queue, results_queue, chrome_options, url):
             driver.set_window_position(x_position, y_position)
             print(f"[Thread {thread_id}] Browser window set to {window_width}x{window_height} at position ({x_position}, {y_position})")
 
-            # Process the email
-            success = process_single_email(driver, wait, current_email_data, url)
+            # Process the email with retry logic for "Connection not secure" errors
+            max_retries = 5
+            success = False
+
+            for retry_attempt in range(max_retries):
+                if retry_attempt > 0:
+                    print(f"\n[Thread {thread_id}] {'='*60}")
+                    print(f"[Thread {thread_id}] RETRY ATTEMPT {retry_attempt}/{max_retries - 1}")
+                    print(f"[Thread {thread_id}] Restarting registration process...")
+                    print(f"[Thread {thread_id}] {'='*60}\n")
+                    # Navigate back to start fresh
+                    driver.get(url)
+                    wait_for_page_load(driver)
+                    time.sleep(2)
+
+                result = process_single_email(driver, wait, current_email_data, url)
+
+                if result == 'retry':
+                    # Connection not secure - retry the entire process
+                    if retry_attempt < max_retries - 1:
+                        print(f"[Thread {thread_id}] Waiting 5 seconds before retry...")
+                        time.sleep(5)
+                        continue
+                    else:
+                        print(f"[Thread {thread_id}] ✗ Max retries reached, giving up on this account")
+                        success = False
+                        break
+                elif result == True:
+                    # Success!
+                    success = True
+
+                    # Immediately save to success.txt
+                    print(f"\n[Thread {thread_id}] ✓ Account completed successfully!")
+                    save_success(current_email_data)
+                    remove_from_emails_file(current_email_data['email'], EMAILS_FILE)
+                    break
+                else:
+                    # Permanent failure
+                    success = False
+                    break
 
             if success:
                 results_queue.put({
@@ -1100,15 +1522,19 @@ def main():
     print(f"Total emails to process: {len(email_data_list)}")
     print(f"Number of parallel browsers: {NUM_PARALLEL_BROWSERS}")
     print(f"Using password: {PASSWORD}")
+    print(f"Webmail type: {WEBMAIL_TYPE}")
+    print(f"Proxy enabled: {USE_PROXY}")
     print(f"{'='*60}\n")
 
-    # Set up Chrome/Chromium options
-    chrome_options = Options()
-    # Uncomment the line below if you want to run in headless mode
-    # chrome_options.add_argument('--headless')
-
-    # Optional: Set custom Chromium binary location if needed
-    # chrome_options.binary_location = "/Applications/Chromium.app/Contents/MacOS/Chromium"
+    # Load proxies if enabled
+    if USE_PROXY:
+        proxies = load_proxies(PROXY_FILE)
+        if proxies:
+            for proxy in proxies:
+                proxy_queue.put(proxy)
+            print(f"✓ Proxy rotation enabled with {len(proxies)} proxy/proxies\n")
+        else:
+            print("⚠ USE_PROXY is True but no proxies loaded. Running without proxy.\n")
 
     # Create queues for coordinating work
     email_queue = Queue()
@@ -1127,7 +1553,7 @@ def main():
     for i in range(NUM_PARALLEL_BROWSERS):
         thread = threading.Thread(
             target=worker_thread,
-            args=(i, email_queue, results_queue, chrome_options, url)
+            args=(i, email_queue, results_queue, url)
         )
         thread.start()
         threads.append(thread)

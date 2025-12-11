@@ -13,7 +13,7 @@ IMAP_SERVER = "mail.coaco.space"
 EMAIL = ""
 PASSWORD = ""
 # Alternative: Set credential string in format "email|password" or "email:password"
-CREDENTIAL_STRING = "welmon23@coaco.space|alonso370"
+CREDENTIAL_STRING = "xarvin24@coaco.space|alonso370"
 
 # Parse credentials if EMAIL and PASSWORD are blank
 if not EMAIL or not PASSWORD:

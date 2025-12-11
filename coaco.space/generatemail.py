@@ -12,7 +12,7 @@ import os
 # ============================================================================
 API_URL = "https://mail.coaco.space/api/v1/user"
 API_KEY = "0CLB1PH5U0KE2BXDGYOY5A28VOTYAM7I"
-DEFAULT_PASSWORD = "alonso370"
+DEFAULT_PASSWORD = "railway370"
 DOMAIN = "coaco.space"
 QUOTA = 2048  # MB
 # ============================================================================
