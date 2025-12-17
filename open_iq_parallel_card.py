@@ -1,7 +1,8 @@
 #!/Users/meaookung144/Documents/GitHub/premium-acc-reg/venv/bin/python3
 """
-Selenium macro to open iq.com with Chromium browser - PARALLEL VERSION
+Selenium macro to open iq.com with Chromium browser - PARALLEL VERSION (CARD PAYMENT)
 Runs 2 browsers simultaneously to process 2 accounts at once
+Uses CREDIT CARD payment instead of Rabbit Line Pay
 """
 
 from selenium import webdriver
@@ -50,6 +51,16 @@ WEBMAIL_TYPE = "pranakorn"  # Options: "pranakorn" or "hotmail"
 USE_PROXY = False  # Set to True to enable proxy support
 PROXY_FILE = "proxy.txt"  # File containing proxies (format: ip:port or user:pass@ip:port)
 PROXY_TYPE = "http"  # Options: "http", "https", "socks5"
+
+# ============================================================================
+# CARD PAYMENT CONFIGURATION
+# ============================================================================
+# Credit card details for automatic payment
+# The card will be split into 4 groups of 4 digits for the input fields
+CARD_NUMBER = "55010"  # Card number (16 digits, no spaces)
+CARD_EXPIRY_MONTH = "12"  # Expiry month (MM format, e.g., "12")
+CARD_EXPIRY_YEAR = "2025"  # Expiry year (YYYY format, e.g., "2025")
+CARD_CVV = "123"  # CVV code (3-4 digits)
 
 # IMAP Configuration for pranakorn emails
 IMAP_SERVER = "mail.coaco.space"
@@ -1164,34 +1175,75 @@ def process_single_email(driver, wait, current_email_data, url):
     except Exception as e:
         print(f"Error selecting subscription plan: {e}")
 
-    # Step 17: Select Rabbit Line Pay
+    # Step 17: Select Credit Card Payment
     try:
-        print("\nStep 16: Selecting Rabbit Line Pay...")
+        print("\nStep 16: Selecting Credit Card payment...")
         payment_method = None
         payment_selectors = [
-            (By.XPATH, "//li[contains(@class, 'pay-list-item')]//p[contains(text(), 'Rabbit Line Pay')]"),
-            (By.CSS_SELECTOR, "li.pay-list-item[rseat='2:1']"),
-            (By.XPATH, "//li[@rseat='2:1']")
+            (By.XPATH, "//li[contains(@class, 'pay-list-item')]//p[contains(text(), 'บัตรเครดิต')]"),
+            (By.CSS_SELECTOR, "li.pay-list-item[rseat='2:2']"),
+            (By.XPATH, "//li[@rseat='2:2']")
         ]
 
         for by, selector in payment_selectors:
             try:
                 payment_method = wait.until(EC.element_to_be_clickable((by, selector)))
                 if payment_method:
-                    print(f"Found Rabbit Line Pay using: {selector}")
+                    print(f"Found Credit Card payment using: {selector}")
                     break
             except:
                 continue
 
         if payment_method:
             payment_method.click()
-            print("✓ Selected Rabbit Line Pay successfully!")
+            print("✓ Selected Credit Card payment successfully!")
             time.sleep(0.5)
         else:
-            print("✗ Could not find Rabbit Line Pay")
+            print("✗ Could not find Credit Card payment")
 
     except Exception as e:
         print(f"Error selecting payment method: {e}")
+
+    # Step 17.5: Fill in card details
+    try:
+        print("\nStep 16.5: Filling in card details...")
+
+        # Split card number into 4 groups of 4 digits
+        card_groups = [CARD_NUMBER[i:i+4] for i in range(0, 16, 4)]
+
+        # Find all card number input fields
+        card_inputs = driver.find_elements(By.CSS_SELECTOR, "input.banknumber-input-input[type='type']")
+
+        if len(card_inputs) >= 6:
+            # Fill card number (4 inputs)
+            print(f"  Filling card number...")
+            for i in range(4):
+                card_inputs[i].clear()
+                card_inputs[i].send_keys(card_groups[i])
+                time.sleep(0.1)
+            print(f"  ✓ Card number entered: {CARD_NUMBER}")
+
+            # Fill expiry date (month and year in one input, usually MM/YY format)
+            print(f"  Filling expiry date...")
+            card_inputs[4].clear()
+            card_inputs[4].send_keys(CARD_EXPIRY_MONTH)
+            time.sleep(0.1)
+            card_inputs[4].send_keys(CARD_EXPIRY_YEAR[-2:])  # Last 2 digits of year
+            print(f"  ✓ Expiry date entered: {CARD_EXPIRY_MONTH}/{CARD_EXPIRY_YEAR[-2:]}")
+
+            # Fill CVV
+            print(f"  Filling CVV...")
+            card_inputs[5].clear()
+            card_inputs[5].send_keys(CARD_CVV)
+            print(f"  ✓ CVV entered")
+
+            print("✓ Card details filled successfully!")
+            time.sleep(0.5)
+        else:
+            print(f"⚠ Found {len(card_inputs)} input fields, expected at least 6")
+
+    except Exception as e:
+        print(f"Error filling card details: {e}")
 
     # Step 18: Click Join VIP button
     try:

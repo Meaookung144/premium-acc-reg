@@ -35,6 +35,14 @@ NUM_PARALLEL_BROWSERS = 3  # Number of browsers to run in parallel
 IMAP_SERVER = "mail.coaco.space"
 OTP_POLL_INTERVAL = 0.5  # Poll every 500ms (reduced from 6 seconds)
 
+# ============================================================================
+# SUBSCRIPTION PACKAGE CONFIGURATION
+# ============================================================================
+SUBSCRIPTION_MONTHS = 1  # Options: 1, 3, or 12
+# - 1 month:  ฿119 (Monthly Subscription) - rseat='0:0'
+# - 3 months: ฿339 (Quarterly Subscription) - rseat='0:1'
+# - 12 months: ฿1200 (Annual Subscription) - rseat='0:2'
+
 # Month names
 MONTHS = ["January", "February", "March", "April", "May", "June",
           "July", "August", "September", "October", "November", "December"]
@@ -214,6 +222,8 @@ def process_single_email(driver, wait, current_email_data, url):
         False - Permanent failure
         'retry' - Connection not secure, should retry entire process
     """
+    global SUBSCRIPTION_MONTHS
+
     print(f"\n{'='*60}")
     print(f"Processing email: {current_email_data['email']}")
     print(f"{'='*60}")
@@ -691,34 +701,64 @@ def process_single_email(driver, wait, current_email_data, url):
     except Exception as e:
         print(f"Note: No popup to close or error: {e}")
 
-    # Step 15: Select Monthly Subscription plan
+    # Step 15: Select Subscription package based on configuration
     try:
-        print("\nStep 14: Selecting Monthly Subscription plan (฿49)...")
-        monthly_plan = None
-        monthly_selectors = [
-            (By.XPATH, "//div[contains(@class, 'goods-item-wrapper')]//p[contains(text(), 'Monthly Subscription')]"),
+        # Determine package details based on SUBSCRIPTION_MONTHS
+        package_config = {
+            1: {
+                'rseat': '0:0',
+                'name': 'Monthly Subscription',
+                'price': '฿49',
+                'description': '1 Month'
+            },
+            3: {
+                'rseat': '0:1',
+                'name': 'Quarterly Subscription',
+                'price': '฿339',
+                'description': '3 Months'
+            },
+            12: {
+                'rseat': '0:2',
+                'name': 'Annual Subscription',
+                'price': '฿1200',
+                'description': '12 Months'
+            }
+        }
+
+        if SUBSCRIPTION_MONTHS not in package_config:
+            print(f"⚠ Invalid SUBSCRIPTION_MONTHS: {SUBSCRIPTION_MONTHS}, defaulting to 1 month")
+            SUBSCRIPTION_MONTHS = 1
+
+        package = package_config[SUBSCRIPTION_MONTHS]
+
+        print(f"\nStep 14: Selecting {package['description']} Subscription ({package['price']})...")
+        print(f"Target rseat: {package['rseat']}")
+        print(f"Package name: {package['name']}")
+
+        subscription_plan = None
+        plan_selectors = [
+            (By.XPATH, f"//div[contains(@class, 'goods-item-wrapper')]//p[contains(text(), '{package['name']}')]"),
             (By.CSS_SELECTOR, "div.goods-item-wrapper"),
-            (By.XPATH, "//div[contains(@class, 'goods-item-wrapper') and contains(@rseat, '1:0')]")
+            (By.XPATH, f"//div[contains(@class, 'goods-item-wrapper') and contains(@rseat, '{package['rseat']}')]")
         ]
 
-        for by, selector in monthly_selectors:
+        for by, selector in plan_selectors:
             try:
-                monthly_plan = wait.until(EC.element_to_be_clickable((by, selector)))
-                if monthly_plan:
-                    print(f"Found Monthly plan using: {selector}")
+                subscription_plan = wait.until(EC.element_to_be_clickable((by, selector)))
+                if subscription_plan:
                     break
             except:
                 continue
 
-        if monthly_plan:
-            monthly_plan.click()
-            print("✓ Selected Monthly Subscription (฿49) successfully!")
+        if subscription_plan:
+            subscription_plan.click()
+            print(f"✓ Selected {package['description']} Subscription ({package['price']}) successfully!")
             time.sleep(0.5)
         else:
-            print("✗ Could not find Monthly Subscription plan")
+            print(f"✗ Could not find {package['description']} Subscription plan")
 
     except Exception as e:
-        print(f"Error selecting Monthly plan: {e}")
+        print(f"Error selecting subscription plan: {e}")
 
     # Step 16: Select Rabbit Line Pay
     try:
